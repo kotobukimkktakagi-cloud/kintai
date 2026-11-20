@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QR打刻</title>
+<style>
+  :root { color-scheme: light; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, "Hiragino Sans", "Yu Gothic", sans-serif; background: #f4f5f7; }
+  body { display: flex; flex-direction: column; align-items: center; padding: 16px; box-sizing: border-box; }
+  h1 { font-size: 22px; margin: 4px 0 12px; }
+  #clock { font-size: 40px; font-weight: 700; margin-bottom: 12px; font-variant-numeric: tabular-nums; }
+  #reader { width: min(92vw, 480px); border-radius: 12px; overflow: hidden; background: #000; }
+  #msg { margin-top: 16px; width: min(92vw, 480px); min-height: 90px; border-radius: 12px; padding: 14px;
+         box-sizing: border-box; font-size: 26px; font-weight: 700; text-align: center;
+         display: flex; align-items: center; justify-content: center; background: #e5e7eb; color: #374151; }
+  #msg.in   { background: #16a34a; color: #fff; }
+  #msg.out  { background: #2563eb; color: #fff; }
+  #msg.warn { background: #f59e0b; color: #1f2937; }
+  #msg.err  { background: #dc2626; color: #fff; }
+  small { margin-top: 12px; color: #6b7280; }
+  button.link { background: none; border: none; color: #6b7280; text-decoration: underline; margin-top: 8px; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>QR打刻</h1>
+<div id="clock">--:--:--</div>
+<div id="reader"></div>
+<div id="msg">QRコードをカメラにかざしてください</div>
+<button class="link" id="reset">合言葉を入力し直す</button>
+<small>出勤・退勤は自動で判定されます</small>
+
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script>
+// ★ここを書き換える：Apps Scriptをウェブアプリとして公開したときのURL（/exec で終わるもの）
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbyr93pkqZfTtXSzE-u9t3T0dM4irbChEg8gmRtL3yxWhsgVKRvRcMgGFpQ8jucRNuDS/exec';
+
+// 同じQRを連続で読み取らない時間（ミリ秒）
+const SAME_QR_COOLDOWN_MS = 5000;
+
+// 合言葉は端末に1回だけ入力して保存（公開ページにソースとして残さないため）
+function getToken() {
+  let t = '';
+  try { t = localStorage.getItem('punch_token') || ''; } catch (e) {}
+  if (!t) {
+    t = prompt('Apps Script の TOKEN（合言葉）を入力してください') || '';
+    try { localStorage.setItem('punch_token', t); } catch (e) {}
+  }
+  return t;
+}
+document.getElementById('reset').onclick = () => {
+  try { localStorage.removeItem('punch_token'); } catch (e) {}
+  getToken();
+};
+
+// 時計
+setInterval(() => {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+}, 500);
+
+const msg = document.getElementById('msg');
+let busy = false;
+let lastText = '', lastAt = 0, resetTimer = null;
+
+function show(text, cls) {
+  msg.textContent = text;
+  msg.className = cls || '';
+  clearTimeout(resetTimer);
+  resetTimer = setTimeout(() => {
+    msg.textContent = 'QRコードをカメラにかざしてください';
+    msg.className = '';
+  }, 4000);
+}
+
+function beep(ok) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value = ok ? 880 : 300; g.gain.value = 0.15;
+    o.start(); o.stop(ctx.currentTime + (ok ? 0.15 : 0.4));
+  } catch (e) {}
+}
+
+async function onScan(text) {
+  const now = Date.now();
+  if (busy) return;
+  if (text === lastText && now - lastAt < SAME_QR_COOLDOWN_MS) return;
+  lastText = text; lastAt = now; busy = true;
+  show('送信中…', '');
+  try {
+    // text/plain で送ると事前確認(CORS preflight)が不要になり、Apps Scriptで動く
+    const res = await fetch(GAS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ token: getToken(), id: text })
+    });
+    const data = await res.json();
+    if (data.ok && data.type === '出勤') { show(data.message, 'in'); beep(true); }
+    else if (data.ok && data.type === '退勤') { show(data.message, 'out'); beep(true); }
+    else if (data.ok) { show(data.message, 'warn'); }
+    else { show(data.message || 'エラー', 'err'); beep(false); }
+  } catch (e) {
+    show('通信エラー。もう一度かざしてください', 'err'); beep(false);
+  } finally {
+    busy = false;
+  }
+}
+
+const scanner = new Html5Qrcode('reader');
+scanner.start(
+  { facingMode: 'user' },                       // 内側カメラ。外側にしたい場合は 'environment'
+  { fps: 10, qrbox: { width: 250, height: 250 } },
+  onScan,
+  () => {}
+).catch(err => show('カメラを起動できません：' + err, 'err'));
+</script>
+</body>
+</html>
