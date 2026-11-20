@@ -109,7 +109,7 @@ async function onScan(text) {
 
 const scanner = new Html5Qrcode('reader');
 scanner.start(
-  { facingMode: 'user' },                       // 内側カメラ。外側にしたい場合は 'environment'
+  { facingMode: 'environment' },                       // 内側カメラ。外側にしたい場合は 'environment'
   { fps: 10, qrbox: { width: 250, height: 250 } },
   onScan,
   () => {}
